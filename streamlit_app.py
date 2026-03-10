@@ -1,6 +1,6 @@
 # ============================================
 # DIAMOND PRICE PREDICTION - STREAMLIT APP
-# DENGAN DOWNLOAD MODEL DARI GOOGLE DRIVE
+# VERSI AMAN - HANDLE ERROR INSTALL
 # ============================================
 
 import streamlit as st
@@ -8,9 +8,11 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
-import gdown
 import tempfile
 from pathlib import Path
+import requests
+import zipfile
+import io
 
 # ============================================
 # KONFIGURASI HALAMAN
@@ -23,189 +25,218 @@ st.set_page_config(
 )
 
 # ============================================
-# FUNGSI DOWNLOAD MODEL DARI GOOGLE DRIVE
+# CEK DAN INSTALL LIBRARY YANG DIBUTUHKAN
 # ============================================
-@st.cache_resource
-def download_models_from_drive():
-    """
-    Download semua model dari Google Drive
-    Menggunakan gdown untuk mengambil file dari shared link
-    """
+def check_and_install_libraries():
+    """Cek apakah library sudah terinstall"""
     
-    # Buat progress bar
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    required_libs = {
+        'pandas': 'pandas',
+        'numpy': 'numpy',
+        'sklearn': 'scikit-learn',
+        'xgboost': 'xgboost',
+        'joblib': 'joblib'
+    }
     
-    # Buat folder temporary untuk menyimpan model
-    temp_dir = tempfile.mkdtemp()
-    models_dir = Path(temp_dir) / "models"
-    models_dir.mkdir(exist_ok=True)
+    missing_libs = []
     
-    # DAFTAR FILE DAN LINK GOOGLE DRIVE
-    # Cara mendapatkan link: 
-    # 1. Upload file ke Google Drive
-    # 2. Share file (dapatkan link sharing)
-    # 3. Extract file ID dari link
-    # Contoh link: https://drive.google.com/file/d/1ABC123xxx/view
-    # File ID = 1ABC123xxx
-    
-    files_to_download = [
-        {
-            'name': 'knn_model.pkl',
-            'url': 'https://drive.google.com/uc?id=1ABC123xxx',  # GANTI DENGAN ID ANDA
-            'description': 'KNN Model'
-        },
-        {
-            'name': 'rf_model.pkl',
-            'url': 'https://drive.google.com/uc?id=1DEF456xxx',  # GANTI DENGAN ID ANDA
-            'description': 'Random Forest Model'
-        },
-        {
-            'name': 'xgb_model.pkl',
-            'url': 'https://drive.google.com/uc?id=1GHI789xxx',  # GANTI DENGAN ID ANDA
-            'description': 'XGBoost Model'
-        },
-        {
-            'name': 'scaler.pkl',
-            'url': 'https://drive.google.com/uc?id=1JKL012xxx',  # GANTI DENGAN ID ANDA
-            'description': 'Standard Scaler'
-        },
-        {
-            'name': 'le_cut.pkl',
-            'url': 'https://drive.google.com/uc?id=1MNO345xxx',  # GANTI DENGAN ID ANDA
-            'description': 'Label Encoder - Cut'
-        },
-        {
-            'name': 'le_color.pkl',
-            'url': 'https://drive.google.com/uc?id=1PQR678xxx',  # GANTI DENGAN ID ANDA
-            'description': 'Label Encoder - Color'
-        },
-        {
-            'name': 'le_clarity.pkl',
-            'url': 'https://drive.google.com/uc?id=1STU901xxx',  # GANTI DENGAN ID ANDA
-            'description': 'Label Encoder - Clarity'
-        },
-        {
-            'name': 'metrics.pkl',
-            'url': 'https://drive.google.com/uc?id=1VWX234xxx',  # GANTI DENGAN ID ANDA
-            'description': 'Model Metrics'
-        }
-    ]
-    
-    downloaded_files = {}
-    total_files = len(files_to_download)
-    
-    for i, file_info in enumerate(files_to_download):
-        file_path = models_dir / file_info['name']
-        
-        status_text.text(f"📥 Downloading {file_info['description']}...")
-        
+    for lib_name, pip_name in required_libs.items():
         try:
-            # Download file
-            gdown.download(
-                file_info['url'],
-                str(file_path),
-                quiet=False
-            )
-            
-            # Load file ke memory
-            downloaded_files[file_info['name'].replace('.pkl', '')] = joblib.load(file_path)
-            
-            # Update progress
-            progress_bar.progress((i + 1) / total_files)
-            
-        except Exception as e:
-            st.error(f"❌ Gagal download {file_info['name']}: {e}")
-            return None
+            __import__(lib_name)
+        except ImportError:
+            missing_libs.append(pip_name)
     
-    status_text.text("✅ Semua model berhasil didownload!")
-    progress_bar.empty()
+    if missing_libs:
+        st.warning(f"⚠️ Library berikut belum terinstall: {', '.join(missing_libs)}")
+        st.info("📦 Install manual di terminal dengan: pip install " + " ".join(missing_libs))
+        return False
     
-    return downloaded_files
+    return True
 
 # ============================================
-# FUNGSI LOAD MODEL ALTERNATIF (MANUAL UPLOAD)
+# FUNGSI DOWNLOAD DARI GOOGLE DRIVE (TANPA GDOWN)
 # ============================================
-def manual_upload_models():
+def download_from_drive(file_id, output_path):
     """
-    Alternatif: User upload file model secara manual
+    Download file dari Google Drive menggunakan requests
+    Alternatif jika gdown bermasalah
     """
+    
+    # URL download dari Google Drive
+    URL = "https://docs.google.com/uc?export=download"
+    
+    session = requests.Session()
+    response = session.get(URL, params={'id': file_id}, stream=True)
+    
+    # Handle confirmation token untuk file besar
+    token = None
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            token = value
+            break
+    
+    if token:
+        params = {'id': file_id, 'confirm': token}
+        response = session.get(URL, params=params, stream=True)
+    
+    # Download file
+    with open(output_path, "wb") as f:
+        for chunk in response.iter_content(32768):
+            if chunk:
+                f.write(chunk)
+    
+    return output_path
+
+# ============================================
+# FUNGSI DOWNLOAD ALL MODELS
+# ============================================
+@st.cache_resource
+def download_all_models():
+    """
+    Download semua model dari Google Drive
+    """
+    
+    with st.spinner("📥 Mendownload model dari Google Drive..."):
+        
+        # Buat folder temporary
+        temp_dir = tempfile.mkdtemp()
+        models_dir = Path(temp_dir) / "models"
+        models_dir.mkdir(exist_ok=True)
+        
+        # DAFTAR FILE ID GOOGLE DRIVE
+        # GANTI DENGAN FILE ID ANDA
+        file_ids = {
+            'knn_model.pkl': '1KgI3-9AUlklKorCD0FpaGmwG55YXjyoD',      # GANTI
+            'rf_model.pkl': '1HtTeRH4nrIQVhqPm2ZZHxfaPfW6sKA5b',       # GANTI
+            'xgb_model.pkl': '1zwsDShlkKLDJb2WjSiuC_9qMC-ANinHX',      # GANTI
+            'scaler.pkl': '19wmvErUcLiqJhpPQ0iJFXxVah8tuxaRg',         # GANTI
+            'le_cut.pkl': '1y9FLGI6H2t_D7qauGVpZGCrYsbqpwSqW',         # GANTI
+            'le_color.pkl': '1usHXz-uS0wLE4l99HlHX4EVz8DFcu_6w',       # GANTI
+            'le_clarity.pkl': '1SoI1HQgfjxkmdWnlAooN-AYE0H9ZS_Tj',     # GANTI
+        
+        }
+        
+        downloaded = {}
+        progress_bar = st.progress(0)
+        total_files = len(file_ids)
+        
+        for i, (filename, file_id) in enumerate(file_ids.items()):
+            try:
+                # Tampilkan status
+                st.caption(f"📥 Downloading {filename}...")
+                
+                # Path untuk menyimpan
+                file_path = models_dir / filename
+                
+                # Download file
+                download_from_drive(file_id, str(file_path))
+                
+                # Load file
+                model_name = filename.replace('.pkl', '')
+                downloaded[model_name] = joblib.load(file_path)
+                
+                # Update progress
+                progress_bar.progress((i + 1) / total_files)
+                
+            except Exception as e:
+                st.error(f"❌ Gagal download {filename}: {e}")
+                return None
+        
+        progress_bar.empty()
+        st.success("✅ Semua model berhasil didownload!")
+        
+        return downloaded
+
+# ============================================
+# FUNGSI UPLOAD MANUAL
+# ============================================
+def manual_upload():
+    """Upload file model secara manual"""
+    
     st.info("📁 Upload file model satu per satu")
     
-    uploaded_files = {}
+    uploaded = {}
     
-    # Buat kolom untuk upload
     col1, col2 = st.columns(2)
     
     with col1:
-        knn_file = st.file_uploader("Upload knn_model.pkl", type=['pkl'])
-        if knn_file:
-            uploaded_files['knn_model'] = joblib.load(knn_file)
+        knn = st.file_uploader("knn_model.pkl", type=['pkl'])
+        if knn:
+            uploaded['knn_model'] = joblib.load(knn)
         
-        rf_file = st.file_uploader("Upload rf_model.pkl", type=['pkl'])
-        if rf_file:
-            uploaded_files['rf_model'] = joblib.load(rf_file)
+        rf = st.file_uploader("rf_model.pkl", type=['pkl'])
+        if rf:
+            uploaded['rf_model'] = joblib.load(rf)
         
-        xgb_file = st.file_uploader("Upload xgb_model.pkl", type=['pkl'])
-        if xgb_file:
-            uploaded_files['xgb_model'] = joblib.load(xgb_file)
+        xgb = st.file_uploader("xgb_model.pkl", type=['pkl'])
+        if xgb:
+            uploaded['xgb_model'] = joblib.load(xgb)
         
-        scaler_file = st.file_uploader("Upload scaler.pkl", type=['pkl'])
-        if scaler_file:
-            uploaded_files['scaler'] = joblib.load(scaler_file)
+        scaler = st.file_uploader("scaler.pkl", type=['pkl'])
+        if scaler:
+            uploaded['scaler'] = joblib.load(scaler)
     
     with col2:
-        le_cut_file = st.file_uploader("Upload le_cut.pkl", type=['pkl'])
-        if le_cut_file:
-            uploaded_files['le_cut'] = joblib.load(le_cut_file)
+        le_cut = st.file_uploader("le_cut.pkl", type=['pkl'])
+        if le_cut:
+            uploaded['le_cut'] = joblib.load(le_cut)
         
-        le_color_file = st.file_uploader("Upload le_color.pkl", type=['pkl'])
-        if le_color_file:
-            uploaded_files['le_color'] = joblib.load(le_color_file)
+        le_color = st.file_uploader("le_color.pkl", type=['pkl'])
+        if le_color:
+            uploaded['le_color'] = joblib.load(le_color)
         
-        le_clarity_file = st.file_uploader("Upload le_clarity.pkl", type=['pkl'])
-        if le_clarity_file:
-            uploaded_files['le_clarity'] = joblib.load(le_clarity_file)
+        le_clarity = st.file_uploader("le_clarity.pkl", type=['pkl'])
+        if le_clarity:
+            uploaded['le_clarity'] = joblib.load(le_clarity)
         
-        metrics_file = st.file_uploader("Upload metrics.pkl", type=['pkl'])
-        if metrics_file:
-            uploaded_files['metrics'] = joblib.load(metrics_file)
+        metrics = st.file_uploader("metrics.pkl", type=['pkl'])
+        if metrics:
+            uploaded['metrics'] = joblib.load(metrics)
     
-    # Cek apakah semua file sudah terupload
-    required_files = ['knn_model', 'rf_model', 'xgb_model', 'scaler', 
-                     'le_cut', 'le_color', 'le_clarity']
+    required = ['knn_model', 'rf_model', 'xgb_model', 'scaler', 'le_cut', 'le_color', 'le_clarity']
     
-    if all(f in uploaded_files for f in required_files):
-        st.success("✅ Semua model berhasil diupload!")
-        return uploaded_files
+    if all(r in uploaded for r in required):
+        st.success("✅ Semua model siap!")
+        return uploaded
     
     return None
 
 # ============================================
-# SIDEBAR - PILIH METODE LOAD MODEL
+# FUNGSI ENCODING INPUT
 # ============================================
-st.sidebar.title("💎 Diamond Prediction")
-st.sidebar.markdown("---")
-
-load_method = st.sidebar.radio(
-    "Pilih Metode Load Model:",
-    ["🌐 Download dari Google Drive", "📁 Upload Manual"]
-)
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### ℹ️ Petunjuk")
-st.sidebar.info(
-    """
-    **Google Drive Method:**
-    - Model akan otomatis didownload
-    - Perlu koneksi internet
-    - File ID harus benar
+def encode_input(models, cut, color, clarity):
+    """Encode categorical variables"""
     
-    **Manual Upload:**
-    - Upload file satu per satu
-    - Cocok untuk ukuran kecil
-    """
-)
+    cut_map = {
+        'Fair': 0, 'Good': 1, 'Very Good': 2, 'Premium': 3, 'Ideal': 4
+    }
+    
+    color_map = {
+        'D': 0, 'E': 1, 'F': 2, 'G': 3, 'H': 4, 'I': 5, 'J': 6
+    }
+    
+    clarity_map = {
+        'IF': 0, 'VVS1': 1, 'VVS2': 2, 'VS1': 3, 
+        'VS2': 4, 'SI1': 5, 'SI2': 6, 'I1': 7
+    }
+    
+    # Jika encoder tersedia, gunakan itu
+    if 'le_cut' in models:
+        cut_enc = models['le_cut'].transform([cut])[0]
+    else:
+        cut_enc = cut_map[cut]
+    
+    if 'le_color' in models:
+        color_enc = models['le_color'].transform([color])[0]
+    else:
+        color_enc = color_map[color]
+    
+    if 'le_clarity' in models:
+        clarity_enc = models['le_clarity'].transform([clarity])[0]
+    else:
+        clarity_enc = clarity_map[clarity]
+    
+    return cut_enc, color_enc, clarity_enc
 
 # ============================================
 # MAIN APP
@@ -213,30 +244,33 @@ st.sidebar.info(
 st.title("💎 Diamond Price Prediction")
 st.markdown("Prediksi harga diamond menggunakan 3 algoritma Machine Learning")
 
-# Load models berdasarkan pilihan
+# Sidebar untuk pilihan
+with st.sidebar:
+    st.header("⚙️ Konfigurasi")
+    
+    option = st.radio(
+        "Pilih metode load model:",
+        ["🌐 Download dari Google Drive", "📁 Upload Manual"]
+    )
+    
+    st.markdown("---")
+    st.markdown("### ℹ️ Petunjuk")
+    
+    if option == "🌐 Download dari Google Drive":
+        st.info("Model akan otomatis didownload dari Google Drive")
+    else:
+        st.info("Upload file .pkl satu per satu")
+
+# Load models
 models = None
 
-if load_method == "🌐 Download dari Google Drive":
-    with st.spinner("⏳ Mendownload model dari Google Drive..."):
-        models = download_models_from_drive()
-        
-        if models:
-            st.success("✅ Models berhasil didownload dan diload!")
-            
-            # Tampilkan info model
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("KNN Model", "✅ Ready")
-            with col2:
-                st.metric("Random Forest", "✅ Ready")
-            with col3:
-                st.metric("XGBoost", "✅ Ready")
-
-else:  # Manual Upload
-    models = manual_upload_models()
+if option == "🌐 Download dari Google Drive":
+    models = download_all_models()
+else:
+    models = manual_upload()
 
 # ============================================
-# FORM PREDIKSI (Jika models sudah ada)
+# FORM PREDIKSI
 # ============================================
 if models:
     st.markdown("---")
@@ -245,19 +279,19 @@ if models:
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        carat = st.number_input("💎 Carat", min_value=0.1, max_value=5.0, value=0.5, step=0.1)
+        carat = st.number_input("💎 Carat", 0.1, 5.0, 0.5, 0.1)
         cut = st.selectbox("✂️ Cut", ["Fair", "Good", "Very Good", "Premium", "Ideal"])
-        depth = st.number_input("📏 Depth %", min_value=40.0, max_value=80.0, value=61.5)
+        depth = st.number_input("📏 Depth %", 40.0, 80.0, 61.5, 0.1)
     
     with col2:
         color = st.selectbox("🎨 Color", ["D", "E", "F", "G", "H", "I", "J"])
         clarity = st.selectbox("🔍 Clarity", ["IF", "VVS1", "VVS2", "VS1", "VS2", "SI1", "SI2", "I1"])
-        table = st.number_input("📐 Table %", min_value=40.0, max_value=80.0, value=55.0)
+        table = st.number_input("📐 Table %", 40.0, 80.0, 55.0, 0.1)
     
     with col3:
-        x = st.number_input("📏 X (mm)", min_value=1.0, max_value=10.0, value=3.95)
-        y = st.number_input("📏 Y (mm)", min_value=1.0, max_value=10.0, value=3.98)
-        z = st.number_input("📏 Z (mm)", min_value=1.0, max_value=10.0, value=2.43)
+        x = st.number_input("📏 X (mm)", 1.0, 10.0, 3.95, 0.01)
+        y = st.number_input("📏 Y (mm)", 1.0, 10.0, 3.98, 0.01)
+        z = st.number_input("📏 Z (mm)", 1.0, 10.0, 2.43, 0.01)
     
     algorithm = st.selectbox(
         "🤖 Pilih Algoritma",
@@ -268,10 +302,8 @@ if models:
     # Tombol prediksi
     if st.button("🔮 Prediksi Harga", type="primary", use_container_width=True):
         try:
-            # Encode categorical
-            cut_enc = models['le_cut'].transform([cut])[0]
-            color_enc = models['le_color'].transform([color])[0]
-            clarity_enc = models['le_clarity'].transform([clarity])[0]
+            # Encode
+            cut_enc, color_enc, clarity_enc = encode_input(models, cut, color, clarity)
             
             # Buat dataframe
             feature_cols = ['carat', 'cut_encoded', 'color_encoded', 'clarity_encoded',
@@ -281,16 +313,19 @@ if models:
                                        depth, table, x, y, z]], columns=feature_cols)
             
             # Prediksi
-            with st.spinner("⏳ Menghitung prediksi..."):
-                if algorithm == "KNN":
+            if algorithm == "KNN":
+                if 'scaler' in models:
                     input_scaled = models['scaler'].transform(input_data)
-                    prediction = models['knn_model'].predict(input_scaled)[0]
-                elif algorithm == "Random Forest":
-                    prediction = models['rf_model'].predict(input_data)[0]
-                else:  # XGBoost
-                    prediction = models['xgb_model'].predict(input_data)[0]
-                
-                prediction = max(0, prediction)  # Pastikan tidak negatif
+                    pred = models['knn_model'].predict(input_scaled)[0]
+                else:
+                    st.error("❌ Scaler tidak ditemukan untuk KNN")
+                    st.stop()
+            elif algorithm == "Random Forest":
+                pred = models['rf_model'].predict(input_data)[0]
+            else:
+                pred = models['xgb_model'].predict(input_data)[0]
+            
+            pred = max(0, pred)
             
             # Tampilkan hasil
             col1, col2, col3 = st.columns(3)
@@ -305,12 +340,19 @@ if models:
             # Hasil utama
             st.markdown("### 💰 Hasil Prediksi")
             
-            # Big number untuk hasil
+            # Card untuk hasil
             st.markdown(f"""
-            <div style="text-align: center; padding: 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 20px; margin: 20px 0;">
-                <h2 style="color: white; margin: 0;">Predicted Price</h2>
-                <h1 style="color: white; font-size: 72px; margin: 10px 0;">${prediction:,.2f}</h1>
-                <p style="color: white;">Menggunakan algoritma: {algorithm}</p>
+            <div style="
+                text-align: center; 
+                padding: 40px; 
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                border-radius: 20px; 
+                margin: 20px 0;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            ">
+                <h2 style="color: white; margin: 0;">Harga Diamond</h2>
+                <h1 style="color: white; font-size: 72px; margin: 10px 0;">${pred:,.2f}</h1>
+                <p style="color: white; font-size: 18px;">Menggunakan algoritma: {algorithm}</p>
             </div>
             """, unsafe_allow_html=True)
             
@@ -320,21 +362,20 @@ if models:
     # Tampilkan metrics jika ada
     if 'metrics' in models:
         st.markdown("---")
-        st.markdown("### 📊 Model Performance Metrics")
+        st.markdown("### 📊 Model Performance")
         
         metrics_data = models['metrics']
         
-        col1, col2, col3 = st.columns(3)
-        
-        for i, (model_name, model_metrics) in enumerate(metrics_data.items()):
-            with [col1, col2, col3][i % 3]:
-                st.markdown(f"**{model_name}**")
-                st.metric("R² Score", f"{model_metrics['R2']:.4f}")
-                st.metric("RMSE", f"${model_metrics['RMSE']:,.2f}")
-                st.metric("MAE", f"${model_metrics['MAE']:,.2f}")
+        cols = st.columns(3)
+        for i, (model, metric) in enumerate(metrics_data.items()):
+            with cols[i]:
+                st.markdown(f"**{model}**")
+                st.metric("R² Score", f"{metric['R2']:.4f}")
+                st.metric("RMSE", f"${metric['RMSE']:,.2f}")
+                st.metric("MAE", f"${metric['MAE']:,.2f}")
 
 else:
-    st.info("👈 Silakan pilih metode load model di sidebar untuk memulai")
+    st.info("👈 Silakan pilih metode dan load model di sidebar")
 
 # ============================================
 # FOOTER
@@ -342,9 +383,9 @@ else:
 st.markdown("---")
 st.markdown(
     """
-    <div style="text-align: center; color: #666;">
+    <div style="text-align: center; color: #666; padding: 20px;">
         <p>© 2024 Diamond Price Prediction | Tugas Machine Learning</p>
-        <p style="font-size: 12px;">Model didownload dari Google Drive</p>
+        <p style="font-size: 12px;">💡 Gunakan Google Drive untuk file model >100MB</p>
     </div>
     """,
     unsafe_allow_html=True
