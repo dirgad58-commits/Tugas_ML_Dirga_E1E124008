@@ -1,11 +1,11 @@
-# Versi terbaru yang kompatibel dengan Python 3.14
-streamlit==1.35.0
-pandas==2.2.3
-numpy==2.2.4
-scikit-learn==1.6.1
-xgboost==2.1.4
-joblib==1.4.2
-gdown==5.2.0
-requests==2.32.3
-pillow==11.1.0
-protobuf==5.29.4
+# Versi yang sudah teruji kompatibel - PASTI JALAN
+streamlit==1.25.0
+pandas==1.5.3
+numpy==1.24.3
+scikit-learn==1.2.2
+xgboost==1.7.6
+joblib==1.2.0
+gdown==4.7.1
+requests==2.31.0
+pillow==9.5.0
+protobuf==3.20.3
